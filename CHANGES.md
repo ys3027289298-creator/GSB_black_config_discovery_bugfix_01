@@ -6,6 +6,14 @@
      Please include the PR number in the changelog entry, not the issue number -->
 
 - Add support for NO_COLOR environment variable to disable ANSI output (#5129)
+- Configuration discovery is now a deterministic function of the input paths:
+  running from the project root or a subdirectory, passing files, directories,
+  or stdin (with or without `--stdin-filename`) yields the same configuration
+  and file set for the same project. Duplicate, relative, or symlinked paths
+  no longer cause the same file to be formatted twice, edited `pyproject.toml`
+  files are re-read instead of served from a stale cache, and an unparseable
+  `pyproject.toml` now exits through the regular configuration error path
+  instead of crashing with a traceback
 - No spurious target version warning when runtime version is included in a
   --target-version flag (#5167)
 - `--line-ranges` no longer inserts an empty line after a docstring when the range

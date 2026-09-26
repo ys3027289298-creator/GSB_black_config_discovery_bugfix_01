@@ -31,14 +31,50 @@ if TYPE_CHECKING:
     import colorama
 
 
-@lru_cache
 def _load_toml(path: Path | str) -> dict[str, Any]:
+    """Load a TOML file, caching the parsed result by path and file identity.
+
+    The cache key includes the file's inode, mtime, and size so that edits
+    to the file between calls are always picked up.  Repeated configuration
+    discovery within a single process is therefore deterministic and never
+    splices stale contents into a fresh parse.
+    """
+    path_str = str(path)
+    try:
+        stat_result = os.stat(path_str)
+        stat_key: tuple[int, int, int] | None = (
+            stat_result.st_ino,
+            stat_result.st_mtime_ns,
+            stat_result.st_size,
+        )
+    except OSError:
+        stat_key = None
+    return _load_toml_cached(path_str, stat_key)
+
+
+@lru_cache
+def _load_toml_cached(
+    path: str, stat_key: tuple[int, int, int] | None
+) -> dict[str, Any]:
     with open(path, "rb") as f:
         return tomllib.load(f)
 
 
-@lru_cache
 def _cached_resolve(path: Path) -> Path:
+    """Resolve `path`, caching the result.
+
+    `Path.resolve()` depends on the current working directory for relative
+    paths, so the cache must be keyed on absolute paths only.  Otherwise a
+    resolution made under one cwd would be replayed under another, silently
+    pointing source selection and symlink checks at the wrong files.
+    """
+    if not path.is_absolute():
+        path = Path(Path.cwd(), path)
+    return _cached_resolve_absolute(path)
+
+
+@lru_cache
+def _cached_resolve_absolute(path: Path) -> Path:
     return path.resolve()
 
 
@@ -100,7 +136,14 @@ def _find_project_root_cached(srcs: tuple[str, ...]) -> tuple[Path | None, str |
             return directory, ".hg directory"
 
         if (directory / "pyproject.toml").is_file():
-            pyproject_toml = _load_toml(directory / "pyproject.toml")
+            try:
+                pyproject_toml = _load_toml(directory / "pyproject.toml")
+            except tomllib.TOMLDecodeError:
+                # The configuration file is unparseable.  Treat its directory
+                # as the project root anyway so that the error is reported
+                # through the regular configuration-reading error path
+                # instead of crashing here with a traceback.
+                return directory, "pyproject.toml"
             if "black" in pyproject_toml.get("tool", {}):
                 return directory, "pyproject.toml"
 

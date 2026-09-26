@@ -36,6 +36,7 @@ from black.const import (
     STDIN_PLACEHOLDER,
 )
 from black.files import (
+    _cached_resolve,
     best_effort_relative_path,
     find_project_root,
     find_pyproject_toml,
@@ -804,6 +805,23 @@ def get_sources(
 ) -> set[Path]:
     """Compute the set of files to be formatted."""
     sources: set[Path] = set()
+    # Resolved paths of every file already scheduled for formatting.  This
+    # guarantees that the same physical file is never formatted twice, even
+    # when reached through duplicate, relative, or symbolic-link paths, or
+    # both as an explicit argument and via a directory scan.
+    seen: set[Path] = set()
+
+    def add_source(path: Path) -> None:
+        try:
+            resolved = _cached_resolve(path)
+        except OSError:
+            resolved = path.absolute()
+        if resolved in seen:
+            if verbose:
+                out(f'Skipping duplicate source: "{path}"', fg="blue")
+            return
+        seen.add(resolved)
+        sources.add(path)
 
     assert (
         root is None or root.is_absolute()
@@ -862,7 +880,12 @@ def get_sources(
 
             if verbose:
                 out(f'Found input source: "{path}"', fg="blue")
-            sources.add(path)
+            if is_stdin:
+                # The stdin pseudo-file is unique and must not be resolved
+                # against the filesystem.
+                sources.add(path)
+            else:
+                add_source(path)
         elif path.is_dir():
             path = src_root / (path.resolve().relative_to(src_root))
             if verbose:
@@ -873,20 +896,19 @@ def get_sources(
                     src_root: root_gitignore,
                     path: get_gitignore(path),
                 }
-            sources.update(
-                gen_python_files(
-                    path.iterdir(),
-                    src_root,
-                    include,
-                    exclude,
-                    extend_exclude,
-                    force_exclude,
-                    report,
-                    gitignore,
-                    verbose=verbose,
-                    quiet=quiet,
-                )
-            )
+            for found in gen_python_files(
+                path.iterdir(),
+                src_root,
+                include,
+                exclude,
+                extend_exclude,
+                force_exclude,
+                report,
+                gitignore,
+                verbose=verbose,
+                quiet=quiet,
+            ):
+                add_source(found)
         elif s == "-":
             if verbose:
                 out("Found input source stdin", fg="blue")
